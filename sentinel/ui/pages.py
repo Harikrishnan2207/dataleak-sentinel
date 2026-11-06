@@ -1,10 +1,14 @@
 """Streamlit pages. Each function renders one sidebar destination."""
 from __future__ import annotations
 
+import time
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
 from ..config import DEFAULT_SETTINGS, RISK_COLORS, RISK_LEVELS
+from ..scenario import run_guided_scenario
 from ..simulator import ACCESS_TYPES, EMPLOYEES, generate_demo_events
 from . import charts
 from . import components as ui
@@ -340,6 +344,60 @@ def detection_rules(db) -> None:
 # -------------------------------------------------------------- demo control
 
 
+def _render_scenario(result: dict, animate: bool) -> None:
+    """Narrate the guided scenario. Every number shown comes from the real result."""
+    def pause() -> None:
+        if animate:
+            time.sleep(0.7)
+
+    n, b = result["normal"], result["bulk"]
+    cfg = result["thresholds"]
+    nu, bu = n["user"][1], b["user"][1]
+
+    with st.container(border=True):
+        st.markdown("**Step 1: A normal user reads a small number of records**")
+        st.markdown(f"{nu} ({n['user'][2]}) ran **{n['access_type']}** and read **{n['records']:,} records**.")
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 2: Another user reads an unusually large number of records**")
+        st.markdown(f"{bu} ({b['user'][2]}) ran **{b['access_type']}** and read **{b['records']:,} records**.")
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 3: The system calculates a risk score**")
+        st.markdown(f"{nu}: score **{n['risk_score']}**. {bu}: score **{b['risk_score']}**. "
+                    f"Thresholds in use: Low up to {cfg['low_max']:,} records, High above {cfg['medium_max']:,}.")
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 4: The system identifies suspicious activity**")
+        for name, res in ((nu, n), (bu, b)):
+            st.markdown(f"{ui.chip(res['risk_level'])} **{escape(name)}**: {escape(res['reason'])}",
+                        unsafe_allow_html=True)
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 5: A security alert is generated**")
+        alert = result["bulk_alert"]
+        if alert is None:
+            st.info(f"No alert was raised for {bu} under the current rules.")
+        else:
+            st.markdown(f"Alert **#{int(alert['alert_id'])}** created for {bu}, status **{alert['status']}**.")
+        if result["normal_alert"] is not None:
+            st.markdown(f"{nu} was also flagged (alert #{int(result['normal_alert']['alert_id'])}).")
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 6: The administrator sees the alert**")
+        if alert is not None:
+            card = alert.to_frame().T.itertuples()
+            st.markdown("".join(ui.alert_card(r) for r in card), unsafe_allow_html=True)
+        st.caption(f"Unreviewed alerts is now {result['unreviewed']}. Open Dashboard or Security Alerts to see it there.")
+    pause()
+    with st.container(border=True):
+        st.markdown("**Step 7: The activity is stored in the SQLite audit log**")
+        st.dataframe(activity_table(result["audit_rows"]), hide_index=True, width="stretch",
+                     column_config=TABLE_CONFIG)
+        st.caption(f"Stored in {result['db_name']}. Access logs: {result['counts_before']['access_logs']:,} "
+                   f"to {result['counts_after']['access_logs']:,}. Open Audit Logs to see the same rows.")
+
+
 def demo_control(db) -> None:
     header("Demo Simulation", "Generate synthetic activity to exercise the detection engine")
     st.info("All users and events here are synthetic. Nothing is read from a real database.")
@@ -359,13 +417,29 @@ def demo_control(db) -> None:
         st.rerun()
     if b2.button("Clear and regenerate", width="stretch", disabled=not confirm):
         db.clear_data()
+        st.session_state.pop("scenario", None)
         summary = generate_demo(db, seed)
         flash(f"Cleared old data and generated {summary['events']} fresh events with {summary['alerts']} alerts.")
         st.rerun()
     if b3.button("Clear all data", width="stretch", disabled=not confirm):
         db.clear_data()
+        st.session_state.pop("scenario", None)
         flash("All logs, detections and alerts were deleted. Detection rules were kept.", "info")
         st.rerun()
+
+    st.markdown('<div class="section-title">Guided live scenario</div>', unsafe_allow_html=True)
+    st.caption("Plays the full story: a normal access, a bulk extraction, scoring, an alert and the audit record. "
+               "The record counts are entered here, not measured from a real query. Scoring, alerts and "
+               "SQLite storage are real, and the pauses between steps are only for readability.")
+    ca, cb = st.columns(2)
+    normal_n = ca.number_input("Normal user records", 1, 100_000, 8, key="sc_normal")
+    bulk_n = cb.number_input("Bulk user records", 1, 10_000_000, 3200, key="sc_bulk")
+    if st.button("Run guided scenario", type="primary", key="run_scenario"):
+        st.session_state["scenario"] = run_guided_scenario(db, int(normal_n), int(bulk_n))
+        st.session_state["scenario_animate"] = True
+        st.rerun()
+    if st.session_state.get("scenario"):
+        _render_scenario(st.session_state["scenario"], st.session_state.pop("scenario_animate", False))
 
     st.markdown('<div class="section-title">Log a single access</div>', unsafe_allow_html=True)
     st.caption("Try your own numbers. The event is stamped with the current time and scored immediately. "

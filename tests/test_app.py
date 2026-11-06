@@ -41,6 +41,12 @@ class AppSmokeTest(unittest.TestCase):
         at.sidebar.radio[0].set_value("User Activity").run()
         self.assertTrue(len(at.dataframe) >= 1)
 
+        # Guided scenario: runs, renders all seven steps and stores two new events.
+        at.sidebar.radio[0].set_value("Demo Simulation").run()
+        button(at, "Run guided scenario").click().run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("Step 7" in m.value for m in at.markdown))
+
         # Manual event on the demo page.
         at.sidebar.radio[0].set_value("Demo Simulation").run()
         next(b for b in at.button if b.label == "Log access event").click().run()
