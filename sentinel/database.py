@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     risk_score       INTEGER NOT NULL,
     risk_level       TEXT    NOT NULL,
     reason           TEXT    NOT NULL,
-    created_at       TEXT    NOT NULL
+    created_at       TEXT    NOT NULL,
+    status           TEXT    NOT NULL DEFAULT 'New'
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -78,6 +79,14 @@ class SentinelDB:
     def init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            # Safe migration: add status column to existing databases.
+            # SQLite raises OperationalError if the column already exists; ignore it.
+            try:
+                conn.execute(
+                    "ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'New'"
+                )
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------- settings
     def get_settings(self) -> dict[str, int]:
@@ -129,10 +138,18 @@ class SentinelDB:
         return len(rows)
 
     def rescan(self) -> dict[str, int]:
-        """Re-run detection over every stored log with the current settings."""
+        """Re-run detection over every stored log with the current settings.
+
+        Analyst review statuses are preserved: any alert that existed before the
+        rescan with status 'Reviewed' keeps that status after rebuilding.
+        """
         cfg = self.get_settings()
         now = datetime.now().strftime(TIME_FORMAT)
         with self._conn() as conn:
+            # Snapshot existing statuses so analyst reviews survive the rebuild.
+            saved_statuses: dict[int, str] = dict(
+                conn.execute("SELECT log_id, status FROM alerts").fetchall()
+            )
             logs = pd.read_sql_query(f"SELECT {LOG_COLUMNS} FROM access_logs", conn)
             results = evaluate_logs(logs, cfg)
             conn.execute("DELETE FROM alerts")
@@ -147,11 +164,13 @@ class SentinelDB:
             merged = results[results["risk_level"] != "Low"].merge(logs, on="log_id")
             conn.executemany(
                 "INSERT INTO alerts (log_id, user_id, username, timestamp, records_accessed, "
-                "risk_score, risk_level, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "risk_score, risk_level, reason, created_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         int(r.log_id), r.user_id, r.username, r.timestamp, int(r.records_accessed),
                         int(r.risk_score), r.risk_level, r.reason, now,
+                        saved_statuses.get(int(r.log_id), "New"),
                     )
                     for r in merged.itertuples()
                 ],
@@ -198,7 +217,8 @@ class SentinelDB:
             if level != "Low":
                 conn.execute(
                     "INSERT INTO alerts (log_id, user_id, username, timestamp, records_accessed, "
-                    "risk_score, risk_level, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "risk_score, risk_level, reason, created_at, status) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'New')",
                     (log_id, user_id, username, ts_text, int(records), score, level, reason, now),
                 )
         return {"log_id": log_id, "risk_score": score, "risk_level": level, "reason": reason}
@@ -230,7 +250,7 @@ class SentinelDB:
     def alerts_df(self) -> pd.DataFrame:
         query = """
             SELECT alert_id, log_id, user_id, username, timestamp, records_accessed,
-                   risk_score, risk_level, reason, created_at
+                   risk_score, risk_level, reason, created_at, status
             FROM alerts
             ORDER BY timestamp DESC, alert_id DESC
         """
@@ -238,6 +258,14 @@ class SentinelDB:
             df = pd.read_sql_query(query, conn)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         return df
+
+    def mark_reviewed(self, alert_id: int) -> None:
+        """Set the status of a single alert to 'Reviewed'."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE alerts SET status = 'Reviewed' WHERE alert_id = ?",
+                (int(alert_id),),
+            )
 
     def table_counts(self) -> dict[str, int]:
         with self._conn() as conn:

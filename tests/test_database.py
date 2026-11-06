@@ -35,6 +35,21 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("Unusual access frequency", reasons)
         self.assertIn("Bulk extraction", reasons)
 
+    def test_alert_default_status_is_new(self):
+        self._load_demo()
+        self.assertTrue((self.db.alerts_df()["status"] == "New").all())
+
+    def test_mark_reviewed_persists_through_rescan(self):
+        self._load_demo()
+        alert = self.db.alerts_df().iloc[0]
+        alert_id, log_id = int(alert["alert_id"]), int(alert["log_id"])
+
+        self.db.mark_reviewed(alert_id)
+        self.db.rescan()
+
+        reviewed = self.db.alerts_df().set_index("log_id").loc[log_id, "status"]
+        self.assertEqual(reviewed, "Reviewed")
+
     def test_persists_after_reopen(self):
         self._load_demo()
         n = len(self.db.activity_df())

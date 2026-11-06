@@ -84,13 +84,14 @@ def dashboard(db) -> None:
     suspicious = medium + high
     flagged = int(alerts["user_id"].nunique())
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     cards = [
         ("Total access attempts", total, f"{activity['user_id'].nunique()} users monitored", "#38BDF8"),
         ("Normal activities", normal, f"{normal / total:.0%} of attempts", RISK_COLORS["Low"]),
         ("Suspicious activities", suspicious, f"{medium} medium, {high} high", RISK_COLORS["Medium"]),
         ("Flagged users", flagged, "users with at least one alert", RISK_COLORS["High"]),
         ("High-risk events", high, f"peak risk score {int(activity['risk_score'].max())}", RISK_COLORS["High"]),
+        ("Unreviewed alerts", int((alerts["status"] == "New").sum()), "require attention", RISK_COLORS["High"]),
     ]
     for col, (label, value, sub, color) in zip(cols, cards):
         col.markdown(ui.kpi(label, value, sub, color), unsafe_allow_html=True)
@@ -177,10 +178,11 @@ def security_alerts(db) -> None:
         col.markdown(ui.kpi(label, value, sub, color), unsafe_allow_html=True)
 
     st.write("")
-    c1, c2 = st.columns([2, 1.3])
+    c1, c2, c3 = st.columns([2, 1.3, 1.3])
     query = c1.text_input("Search alerts", placeholder="Username or reason", key="alert_search")
     sev = c2.multiselect("Severity", ["High", "Medium"], default=["High", "Medium"], key="alert_sev")
-    view = alerts[alerts["risk_level"].isin(sev)]
+    statuses = c3.multiselect("Status", ["New", "Reviewed"], default=["New", "Reviewed"], key="alert_status")
+    view = alerts[alerts["risk_level"].isin(sev) & alerts["status"].isin(statuses)]
     if query.strip():
         q = query.strip().lower()
         hay = (view["username"] + " " + view["reason"]).str.lower()
@@ -193,6 +195,7 @@ def security_alerts(db) -> None:
         "Records Accessed": view["records_accessed"],
         "Risk Score": view["risk_score"],
         "Severity": view["risk_level"].map(ui.risk_label),
+        "Status": view["status"].map({"New": "🔵 New", "Reviewed": "✅ Reviewed"}),
         "Reason": view["reason"],
     })
     st.caption(f"Showing {len(view):,} of {len(alerts):,} alerts, newest first.")
@@ -201,6 +204,17 @@ def security_alerts(db) -> None:
         "Records Accessed": TABLE_CONFIG["Records Accessed"],
         "Reason": st.column_config.TextColumn("Reason", width="large"),
     })
+
+    st.markdown('<div class="section-title">Mark reviewed</div>', unsafe_allow_html=True)
+    alert_id = st.number_input("Alert ID to mark reviewed", min_value=1, step=1, value=1, key="review_alert_id")
+    if st.button("Mark reviewed", key="mark_alert_reviewed"):
+        if int(alert_id) not in set(alerts["alert_id"].astype(int)):
+            st.error("Alert ID not found in the current alert list.")
+        else:
+            db.mark_reviewed(int(alert_id))
+            flash(f"Alert {int(alert_id)} marked as reviewed.")
+            st.rerun()
+
     st.download_button("Download alerts as CSV", table.to_csv(index=False).encode("utf-8"),
                        "dataleak_alerts.csv", "text/csv")
 
