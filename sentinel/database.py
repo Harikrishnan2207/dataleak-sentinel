@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS access_logs (
     timestamp        TEXT    NOT NULL,
     access_type      TEXT    NOT NULL,
     records_accessed INTEGER NOT NULL CHECK (records_accessed >= 0),
-    source           TEXT    NOT NULL DEFAULT 'simulated'
+    source           TEXT    NOT NULL DEFAULT 'simulated',
+    query_text       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_logs_user_time ON access_logs (user_id, timestamp);
 
@@ -87,6 +88,10 @@ class SentinelDB:
                 )
             except sqlite3.OperationalError:
                 pass
+            # Safe migration: databases created before the Query Console lack query_text.
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(access_logs)")]
+            if "query_text" not in columns:
+                conn.execute("ALTER TABLE access_logs ADD COLUMN query_text TEXT")
 
     # ------------------------------------------------------------- settings
     def get_settings(self) -> dict[str, int]:
@@ -185,6 +190,8 @@ class SentinelDB:
         access_type: str,
         records: int,
         timestamp: datetime | None = None,
+        query_text: str | None = None,
+        source: str = "manual-simulated",
     ) -> dict:
         """Store one new access, run detection on it and raise an alert if suspicious."""
         cfg = self.get_settings()
@@ -195,9 +202,9 @@ class SentinelDB:
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO access_logs "
-                "(user_id, username, department, timestamp, access_type, records_accessed, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'manual-simulated')",
-                (user_id, username, department, ts_text, access_type, int(records)),
+                "(user_id, username, department, timestamp, access_type, records_accessed, source, query_text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, username, department, ts_text, access_type, int(records), source, query_text),
             )
             log_id = cur.lastrowid
             recent = pd.read_sql_query(
@@ -237,7 +244,7 @@ class SentinelDB:
     def activity_df(self) -> pd.DataFrame:
         query = """
             SELECT l.log_id, l.user_id, l.username, l.department, l.timestamp, l.access_type,
-                   l.records_accessed, d.risk_score, d.risk_level, d.reason
+                   l.records_accessed, d.risk_score, d.risk_level, d.reason, l.source, l.query_text
             FROM access_logs l
             LEFT JOIN detections d ON d.log_id = l.log_id
             ORDER BY l.timestamp DESC, l.log_id DESC

@@ -28,6 +28,7 @@ NAV = {
     "Security Alerts": pages.security_alerts,
     "Audit Logs": pages.audit_logs,
     "Detection Rules": pages.detection_rules,
+    "Query Console": pages.query_console,
     "Demo Simulation": pages.demo_control,
 }
 

@@ -12,10 +12,11 @@ A lightweight database-security monitoring demo. It stores simulated user access
 |---|---|
 | Dashboard | KPI cards (total attempts, normal, suspicious, flagged users, high-risk events), activity trend, risk distribution, records-vs-threshold scatter, top users, recent alerts |
 | User Activity | Searchable, filterable table: user ID, username, department, timestamp, access type, records, risk score, risk level, reason |
-| Security Alerts | Alert list (username, timestamp, records, score, reason), flagged-user summary, CSV export |
-| Audit Logs | Every access and detection result stored in SQLite; survives restarts; CSV export |
+| Security Alerts | Alert list (username, timestamp, records, score, reason, review status), flagged-user summary, mark alerts as reviewed, CSV export |
+| Audit Logs | Every access and detection result stored in SQLite, with source and query text; survives restarts; CSV export |
 | Detection Rules | Edit thresholds and behaviour rules, then re-scan all stored logs |
-| Demo Simulation | Generate normal / medium / bulk / repeated / burst activity, clear and regenerate, or log a single access of your own |
+| Query Console | Run a read-only SELECT as a simulated user against a synthetic customers table; the monitor counts the rows actually returned, scores them, raises alerts and logs the query |
+| Demo Simulation | Generate normal / medium / bulk / repeated / burst activity, clear and regenerate, run a guided 7-step scenario, or log a single access of your own |
 
 ## Detection logic
 
@@ -66,7 +67,7 @@ The database is created automatically at `data/dataleak_sentinel.db`. To use a d
 python -m unittest discover -s tests -t . -v
 ```
 
-The suite covers the volume boundaries, the behaviour rules, SQLite persistence across restarts, clearing data, configurable thresholds, manual events, and a headless run of every page.
+The suite covers the volume boundaries, the behaviour rules, SQLite persistence and migration of older databases, alert review status, the guided scenario, the query gateway (measured row counts, rejected statements, timeouts) and a headless run of every page.
 
 ## Project layout
 
@@ -81,6 +82,9 @@ dataleak-sentinel/
     detection.py          Rule-based scoring engine
     database.py           SQLite schema and queries
     simulator.py          Synthetic demo data
+    scenario.py           Guided live scenario
+    sample_data.py        Synthetic customers table
+    gateway.py            Monitored read-only query gateway
     ui/                   Styles, components, charts, pages
   tests/                  Unit and UI smoke tests
 ```
@@ -92,5 +96,7 @@ dataleak-sentinel/
 ## Limitations
 
 - Rule-based and per-user only: no baselining, no peer-group comparison, no machine learning.
-- Logs come from the simulator or the manual form, not from a live database audit feed.
-- Alerts have no acknowledge or ticketing workflow.
+- Batch and guided-scenario events use record counts chosen by the simulator. Only Query Console events are measured from real query results, and only for the synthetic customers table.
+- Only queries sent through the Query Console are monitored. User identities are simulated (no login), and monitoring is by rows returned, so an aggregate such as COUNT(*) scores as harmless.
+- Rejected queries (writes, multiple statements) are refused but not logged.
+- Alert review is a simple New or Reviewed flag, with no ticketing workflow.

@@ -8,6 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from ..config import DEFAULT_SETTINGS, RISK_COLORS, RISK_LEVELS
+from ..config import SAMPLE_DB_PATH
+from ..gateway import PREPARED_QUERIES, QueryRejected, run_monitored_query
+from ..sample_data import customer_count, ensure_customers_db
 from ..scenario import run_guided_scenario
 from ..simulator import ACCESS_TYPES, EMPLOYEES, generate_demo_events
 from . import charts
@@ -48,7 +51,14 @@ def empty_state(db, key: str) -> None:
         st.rerun()
 
 
-def activity_table(df: pd.DataFrame) -> pd.DataFrame:
+SOURCE_LABELS = {
+    "simulated": "Simulated batch",
+    "manual-simulated": "Manual entry",
+    "gateway": "Query gateway (measured)",
+}
+
+
+def activity_table(df: pd.DataFrame, audit: bool = False) -> pd.DataFrame:
     out = pd.DataFrame({
         "Log ID": df["log_id"],
         "User ID": df["user_id"],
@@ -61,6 +71,9 @@ def activity_table(df: pd.DataFrame) -> pd.DataFrame:
         "Risk Level": df["risk_level"].map(ui.risk_label),
         "Detection Reason": df["reason"],
     })
+    if audit:
+        out["Source"] = df["source"].map(SOURCE_LABELS).fillna(df["source"])
+        out["Query"] = df["query_text"].fillna("")
     return out
 
 
@@ -261,8 +274,9 @@ def audit_logs(db) -> None:
     if df.empty:
         empty_state(db, "audit")
         return
-    table = activity_table(df)
-    st.dataframe(table, hide_index=True, width="stretch", height=520, column_config=TABLE_CONFIG)
+    table = activity_table(df, audit=True)
+    st.dataframe(table, hide_index=True, width="stretch", height=520,
+                 column_config={**TABLE_CONFIG, "Query": st.column_config.TextColumn("Query", width="large")})
     st.download_button("Download audit log as CSV", df.assign(
         timestamp=df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")).to_csv(index=False).encode("utf-8"),
         "dataleak_audit_log.csv", "text/csv")
@@ -455,3 +469,78 @@ def demo_control(db) -> None:
         kind = {"Low": "success", "Medium": "warning", "High": "error"}[res["risk_level"]]
         flash(f"{user[1]}: {int(records):,} records scored {res['risk_score']} ({res['risk_level']}). {res['reason']}", kind)
         st.rerun()
+
+
+# ------------------------------------------------------------- query console
+
+
+def _render_query_result(res: dict) -> None:
+    log = res["log"]
+    level = log["risk_level"]
+    color = RISK_COLORS[level]
+    shown = f"{res['records']:,}" + ("+" if res["truncated"] else "")
+    cols = st.columns(4)
+    for col, (label, value, sub, c) in zip(cols, [
+        ("Rows returned (measured)", shown, "counted from the real query result", "#38BDF8"),
+        ("Risk score", log["risk_score"], "0 to 100", color),
+        ("Risk level", level, "from the configured thresholds", color),
+        ("Alert", f"#{res['alert_id']}" if res["alert_id"] else "None", "raised for Medium and High" , color),
+    ]):
+        col.markdown(ui.kpi(label, value, sub, c), unsafe_allow_html=True)
+    st.markdown(f"{ui.chip(level)} {escape(log['reason'])}", unsafe_allow_html=True)
+    if res["truncated"]:
+        st.warning("Counting stopped at the safety limit, so the true row count is at least this high.")
+    if res["preview"]:
+        st.dataframe(pd.DataFrame(res["preview"], columns=res["columns"]), hide_index=True, width="stretch")
+    st.caption(f"Preview of the first {len(res['preview'])} of {shown} rows. The monitor counted every returned row. "
+               f"Stored in the audit log as access #{log['log_id']} with source 'query gateway'.")
+
+
+def query_console(db) -> None:
+    header("Query Console", "Run SQL as a simulated user and watch the row count get measured, scored and logged")
+    st.info("Queries run against a synthetic, read-only customers table (invented people, example.com e-mails). "
+            "The monitor counts the rows each query really returns. User identities are simulated: there is no "
+            "real login, and only queries sent through this console are monitored.")
+    path = ensure_customers_db(SAMPLE_DB_PATH)
+    st.caption(f"Table customers: {customer_count(path):,} rows. Columns: customer_id, full_name, email, city, "
+               "segment, credit_limit, member_since. Only a single SELECT is accepted.")
+
+    a, b = st.columns([1.2, 2])
+    user = a.selectbox("Run as user", EMPLOYEES, format_func=lambda e: f"{e[0]}  {e[1]} ({e[2]})", key="qc_user")
+    choice = b.selectbox("Query", list(PREPARED_QUERIES), key="qc_choice")
+    prepared = PREPARED_QUERIES[choice]
+    if prepared is None:
+        sql = st.text_area("SQL (one SELECT only)", value="SELECT customer_id, full_name FROM customers LIMIT 5",
+                           key="qc_custom")
+    else:
+        st.code(prepared, language="sql")
+        sql = prepared
+
+    if st.button("Run query", type="primary", key="qc_run"):
+        try:
+            st.session_state["qc_result"] = run_monitored_query(db, user, sql, path)
+        except QueryRejected as exc:
+            st.session_state.pop("qc_result", None)
+            st.error(str(exc))
+        else:
+            st.rerun()
+
+    result = st.session_state.get("qc_result")
+    if result:
+        _render_query_result(result)
+
+    activity = db.activity_df()
+    recent = activity[activity["source"] == "gateway"].head(8)
+    if not recent.empty:
+        st.markdown('<div class="section-title">Recent console queries</div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({
+            "Timestamp": recent["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Username": recent["username"],
+            "Rows": recent["records_accessed"],
+            "Risk Score": recent["risk_score"],
+            "Risk Level": recent["risk_level"].map(ui.risk_label),
+            "Query": recent["query_text"],
+        }), hide_index=True, width="stretch", column_config={
+            "Risk Score": TABLE_CONFIG["Risk Score"],
+            "Query": st.column_config.TextColumn("Query", width="large"),
+        })

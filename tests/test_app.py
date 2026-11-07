@@ -6,11 +6,12 @@ from pathlib import Path
 
 _TMP = tempfile.TemporaryDirectory()
 os.environ["DATALEAK_DB_PATH"] = str(Path(_TMP.name) / "app_test.db")
+os.environ["DATALEAK_SAMPLE_DB_PATH"] = str(Path(_TMP.name) / "customers_test.db")
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
-PAGES = ["Dashboard", "User Activity", "Security Alerts", "Audit Logs", "Detection Rules", "Demo Simulation"]
+PAGES = ["Dashboard", "User Activity", "Security Alerts", "Audit Logs", "Detection Rules", "Query Console", "Demo Simulation"]
 
 
 def button(at, label):
@@ -46,6 +47,23 @@ class AppSmokeTest(unittest.TestCase):
         button(at, "Run guided scenario").click().run()
         self.assertFalse(at.exception, at.exception)
         self.assertTrue(any("Step 7" in m.value for m in at.markdown))
+
+        # Query Console: a small lookup stays Low, a full dump is measured and alerts.
+        at.sidebar.radio[0].set_value("Query Console").run()
+        button(at, "Run query").click().run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(at.session_state["qc_result"]["records"], 1)
+        at.selectbox(key="qc_choice").set_value("Full table dump").run()
+        button(at, "Run query").click().run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(at.session_state["qc_result"]["records"], 20000)
+        self.assertEqual(at.session_state["qc_result"]["log"]["risk_level"], "High")
+        at.selectbox(key="qc_choice").set_value("Custom query").run()
+        at.text_area(key="qc_custom").set_value("DROP TABLE customers").run()
+        button(at, "Run query").click().run()
+        self.assertTrue(at.error)
+        at.sidebar.radio[0].set_value("Audit Logs").run()
+        self.assertFalse(at.exception, at.exception)
 
         # Manual event on the demo page.
         at.sidebar.radio[0].set_value("Demo Simulation").run()

@@ -9,6 +9,9 @@ DATA_DIR = BASE_DIR / "data"
 # Override with the DATALEAK_DB_PATH environment variable (used by the tests).
 DB_PATH = Path(os.environ.get("DATALEAK_DB_PATH", DATA_DIR / "dataleak_sentinel.db"))
 
+# Synthetic customers table for the Query Console (override with DATALEAK_SAMPLE_DB_PATH).
+SAMPLE_DB_PATH = Path(os.environ.get("DATALEAK_SAMPLE_DB_PATH", DATA_DIR / "sample_customers.db"))
+
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # User-configurable detection settings (stored in the SQLite `settings` table).
