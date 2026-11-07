@@ -62,19 +62,54 @@ The app opens at http://localhost:8501. Open **Demo Simulation** and click **Gen
 
 The database is created automatically at `data/dataleak_sentinel.db`. To use a different file, set the `DATALEAK_DB_PATH` environment variable before starting.
 
+## Event API (optional)
+
+A small FastAPI service lets a separate client report accesses. It checks an API key, validates the input, then uses the same scoring, alert and audit-log code as the dashboard. Events it receives are stored with source `api`.
+
+Open three PowerShell windows in the project folder, with the virtual environment active in each.
+
+**Window 1: start the API** (localhost only). Each window has its own environment variables, so the key is created here and copied to window 2.
+
+```powershell
+$env:DATALEAK_API_KEY = python -c "import secrets; print(secrets.token_urlsafe(24))"
+echo $env:DATALEAK_API_KEY
+python -m uvicorn sentinel.api:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+The API refuses to start if the key is missing or shorter than 16 characters. Interactive docs are at http://127.0.0.1:8000/docs.
+
+**Window 2: send events** (paste the same key):
+
+```powershell
+$env:DATALEAK_API_KEY = "paste-the-key-here"
+python send_events.py demo
+python send_events.py one --user-id U1001 --username aarav.nair --department Finance --records 8
+```
+
+**Window 3: the dashboard.** Run `streamlit run app.py`, then switch on **Live refresh** in the sidebar (or press **Refresh now**) and watch the alert appear on Dashboard and Security Alerts.
+
+| Endpoint | Key needed | Purpose |
+|---|---|---|
+| `GET /health` | No | Is the service and its database reachable |
+| `POST /events` | Yes (`X-API-Key` header) | Report one access; returns score, level, reason and alert id |
+| `GET /alerts` | Yes | List recent alerts (`limit`, `status` filters) |
+
+Both the API and the dashboard write to the same SQLite file. That is fine at demo scale; SQLite waits briefly if both write at once.
+
 ## Run the tests
 
 ```powershell
 python -m unittest discover -s tests -t . -v
 ```
 
-The suite covers the volume boundaries, the behaviour rules, SQLite persistence and migration of older databases, alert review status, the guided scenario, the query gateway (measured row counts, rejected statements, timeouts) and a headless run of every page.
+The suite covers the volume boundaries, the behaviour rules, SQLite persistence and migration of older databases, alert review status, the guided scenario, the query gateway (measured row counts, rejected statements, timeouts), the event API (key checks, input validation, concurrent writes, dashboard integration) and a headless run of every page.
 
 ## Project layout
 
 ```
 dataleak-sentinel/
   app.py                  Streamlit entry point and sidebar navigation
+  send_events.py          Demo client that sends events to the API
   requirements.txt
   .streamlit/config.toml  Dark navy theme
   data/                   SQLite database is created here
@@ -86,6 +121,7 @@ dataleak-sentinel/
     scenario.py           Guided live scenario
     sample_data.py        Synthetic customers table
     gateway.py            Monitored read-only query gateway
+    api.py                Event-collection API (FastAPI)
     ui/                   Styles, components, charts, pages
   tests/                  Unit and UI smoke tests
 ```
@@ -100,4 +136,5 @@ dataleak-sentinel/
 - Batch and guided-scenario events use record counts chosen by the simulator. Only Query Console events are measured from real query results, and only for the synthetic customers table.
 - Only queries sent through the Query Console are monitored. User identities are simulated (no login), and monitoring is by rows returned, so an aggregate such as COUNT(*) scores as harmless.
 - Rejected queries (writes, multiple statements) are refused but not logged.
+- The event API trusts the row counts its client reports, uses one shared key and is meant for localhost only (no TLS, per-client keys or rate limiting). It stamps the time itself, so events cannot be backdated.
 - Alert review is a simple New or Reviewed flag, with no ticketing workflow.

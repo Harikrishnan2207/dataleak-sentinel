@@ -69,6 +69,13 @@ class AppSmokeTest(unittest.TestCase):
         at.sidebar.radio[0].set_value("Audit Logs").run()
         self.assertFalse(at.exception, at.exception)
 
+        # Live refresh: turning it on must not break the refreshable pages.
+        at.sidebar.toggle(key="live_refresh").set_value(True).run()
+        for page in ("Dashboard", "User Activity", "Security Alerts", "Audit Logs", "Demo Simulation"):
+            at.sidebar.radio[0].set_value(page).run()
+            self.assertFalse(at.exception, f"{page} (live refresh): {at.exception}")
+        at.sidebar.toggle(key="live_refresh").set_value(False).run()
+
         # Manual event on the demo page.
         at.sidebar.radio[0].set_value("Demo Simulation").run()
         next(b for b in at.button if b.label == "Log access event").click().run()

@@ -8,7 +8,7 @@ from sentinel.scenario import run_guided_scenario
 
 class GuidedScenarioTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.path = Path(self.tmp.name) / "scenario.db"
         self.db = SentinelDB(self.path)
         self.db.init_schema()

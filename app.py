@@ -32,6 +32,10 @@ NAV = {
     "Demo Simulation": pages.demo_control,
 }
 
+# Pages that are safe to refresh on a timer. Demo Simulation and Query Console are excluded
+# because they animate or hold results the user is reading.
+LIVE_PAGES = {"Dashboard", "User Activity", "Security Alerts", "Audit Logs"}
+
 with st.sidebar:
     st.markdown(
         '<div class="brand"><div class="brand-name">🛡️ DataLeak Sentinel</div>'
@@ -39,6 +43,10 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     page = st.radio("Navigation", list(NAV), label_visibility="collapsed")
+    live = st.toggle("Live refresh (every 5 s)", value=False, key="live_refresh",
+                     help="Reloads Dashboard, User Activity, Security Alerts and Audit Logs so events sent "
+                          "through the API appear without clicking.")
+    st.button("Refresh now", key="refresh_now")
     counts = db.table_counts()
     st.write("")
     st.markdown(
@@ -47,4 +55,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-NAV[page](db)
+if live and page in LIVE_PAGES:
+    st.fragment(run_every="5s")(NAV[page])(db)
+else:
+    NAV[page](db)

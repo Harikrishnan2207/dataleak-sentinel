@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from sentinel.database import SentinelDB
@@ -13,7 +14,7 @@ USER = ("U1011", "farhan.ali", "Operations")
 class GatewayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory()
+        cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         cls.customers = ensure_customers_db(Path(cls.tmp.name) / "customers.db", rows=3000)
 
     @classmethod
@@ -21,7 +22,7 @@ class GatewayTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def setUp(self):
-        self.audit_tmp = tempfile.TemporaryDirectory()
+        self.audit_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = SentinelDB(Path(self.audit_tmp.name) / "audit.db")
         self.db.init_schema()
 
@@ -99,7 +100,7 @@ class GatewayTests(unittest.TestCase):
 
 class MigrationTests(unittest.TestCase):
     def test_old_database_gains_new_columns(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "old.db"
             conn = sqlite3.connect(path)
             conn.executescript(
@@ -118,7 +119,8 @@ class MigrationTests(unittest.TestCase):
             df = db.activity_df()
             self.assertIn("query_text", df.columns)
             self.assertTrue(df["query_text"].isna().all())
-            cols = [r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(alerts)")]
+            with closing(sqlite3.connect(path)) as check:   # close explicitly: Windows keeps open files locked
+                cols = [r[1] for r in check.execute("PRAGMA table_info(alerts)")]
             self.assertIn("status", cols)
 
 

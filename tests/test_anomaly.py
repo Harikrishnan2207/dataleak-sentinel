@@ -88,7 +88,7 @@ class AnomalyRule(unittest.TestCase):
 
 class AnomalyWithDatabase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = SentinelDB(Path(self.tmp.name) / "a.db")
         self.db.init_schema()
 
