@@ -33,8 +33,9 @@ Behaviour rules (all configurable):
 - **Repeated high-volume access**: 3 or more accesses of at least 50 records within 60 minutes (+15 points).
 - **Unusual access frequency**: 10 or more accesses within 15 minutes, even if each is small (+10 points).
 - **Cumulative volume**: 500 or more records by one user within 60 minutes (+10 points).
+- **Unusual for this user**: an access far larger than that user's own history (+15 points). It uses a robust z-score of the record count against the user's median (log scale, median absolute deviation as spread), needs at least 15 earlier accesses, and ignores accesses under 10 records. This is a statistical rule, not machine learning.
 
-Each access gets a score from 0 to 100: volume sets a base score (Low 1 to 25, Medium 26 to 60, High 61 to 85), behaviour rules add points, and any triggered behaviour rule guarantees at least Medium. Scores of 26 or more raise an alert with the reasons listed. These are simple heuristics, not a trained model, and the default thresholds are illustrative rather than validated against real workloads.
+Each access gets a score from 0 to 100: volume sets a base score (Low 1 to 25, Medium 26 to 60, High 61 to 85), behaviour rules add points, and any triggered behaviour rule guarantees at least Medium. Scores of 26 or more raise an alert with the reasons listed. These are simple heuristics, not a trained model. The default thresholds, including the anomaly settings, were tuned on synthetic data only and would need recalibrating on real workloads.
 
 ## Installation (Windows)
 
@@ -95,7 +96,7 @@ dataleak-sentinel/
 
 ## Limitations
 
-- Rule-based and per-user only: no baselining, no peer-group comparison, no machine learning.
+- Rule-based plus one statistical rule (per-user baseline): no peer-group comparison and no machine learning. A patient insider who raises their volume slowly can drag their own baseline upward. On steady synthetic users the rule catches a 19-row spike about 78% of the time and never flags accesses under 10 rows; these figures come from synthetic data.
 - Batch and guided-scenario events use record counts chosen by the simulator. Only Query Console events are measured from real query results, and only for the synthetic customers table.
 - Only queries sent through the Query Console are monitored. User identities are simulated (no login), and monitoring is by rows returned, so an aggregate such as COUNT(*) scores as harmless.
 - Rejected queries (writes, multiple statements) are refused but not logged.

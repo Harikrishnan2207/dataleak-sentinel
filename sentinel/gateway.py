@@ -29,6 +29,7 @@ LOGGED_SQL_LENGTH = 500
 PREPARED_QUERIES = {
     "Look up one customer": "SELECT customer_id, full_name, email, city FROM customers WHERE customer_id = 1042",
     "One city report (60 rows)": "SELECT customer_id, full_name, segment, credit_limit FROM customers WHERE city = 'Chennai' LIMIT 60",
+    "Small report (19 rows)": "SELECT customer_id, full_name, city FROM customers WHERE city = 'Kochi' LIMIT 19",
     "Segment export": "SELECT * FROM customers WHERE segment = 'Corporate'",
     "Full table dump": "SELECT * FROM customers",
     "Custom query": None,

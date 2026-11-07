@@ -9,6 +9,7 @@ import streamlit as st
 
 from ..config import DEFAULT_SETTINGS, RISK_COLORS, RISK_LEVELS
 from ..config import SAMPLE_DB_PATH
+from ..detection import user_baselines
 from ..gateway import PREPARED_QUERIES, QueryRejected, run_monitored_query
 from ..sample_data import customer_count, ensure_customers_db
 from ..scenario import run_guided_scenario
@@ -319,6 +320,16 @@ def detection_rules(db) -> None:
         st.markdown("**Cumulative volume**")
         cumulative = st.number_input("Total records in the repeated-access window", 1, 10_000_000,
                                      cfg["cumulative_limit"])
+
+        st.markdown("**Per-user anomaly detection**")
+        anomaly_on = st.checkbox("Compare each access with the user's own history", value=bool(cfg["anomaly_enabled"]))
+        a, b, c = st.columns(3)
+        anomaly_hist = a.number_input("Accesses needed for a baseline", 3, 1000, int(cfg["anomaly_min_history"]),
+                                      key="an_hist")
+        anomaly_min = b.number_input("Ignore accesses smaller than (records)", 1, 1_000_000,
+                                     int(cfg["anomaly_min_records"]), key="an_min")
+        anomaly_z = c.number_input("Unusual at robust z-score", 0.5, 20.0, float(cfg["anomaly_z"]), step=0.5,
+                                   key="an_z")
         submitted = st.form_submit_button("Save and re-scan all logs", type="primary")
 
     if submitted:
@@ -326,6 +337,8 @@ def detection_rules(db) -> None:
             "low_max": low_max, "medium_max": medium_max, "repeat_min_records": repeat_min,
             "repeat_count": repeat_count, "repeat_window_min": repeat_window,
             "freq_count": freq_count, "freq_window_min": freq_window, "cumulative_limit": cumulative,
+            "anomaly_enabled": int(anomaly_on), "anomaly_min_history": anomaly_hist,
+            "anomaly_min_records": anomaly_min, "anomaly_z": anomaly_z,
         }
         errors = db.save_settings(new_cfg)
         if errors:
@@ -349,10 +362,22 @@ def detection_rules(db) -> None:
 - **Repeated high-volume access** adds 15 points when a user makes the configured number of high-volume accesses inside the window.
 - **Unusual frequency** adds 10 points when a user makes too many accesses inside a short window, even if each one is small.
 - **Cumulative volume** adds 10 points when a user's total records inside the window pass the limit.
+- **Unusual for this user** adds 15 points when an access is far larger than that user's own history. It compares the record count with the user's median on a log scale, using the median absolute deviation as the spread (a robust z-score), and only once the user has enough earlier accesses. This is a statistical rule, not machine learning, and it is tuned on synthetic data only.
 - The final score is capped at 100. Scores of 26 to 60 are **Medium** and 61 or more are **High**, and any triggered behaviour rule guarantees at least Medium, so an access that looks harmless on its own can still raise an alert.
 - Medium and High accesses raise an alert. These are simple, transparent heuristics, not a trained model.
 """
         )
+
+    baselines = user_baselines(db.activity_df(), cfg)
+    if not baselines.empty:
+        st.markdown('<div class="section-title">Per-user baselines</div>', unsafe_allow_html=True)
+        st.caption("What the detector currently treats as normal for each user, from the stored logs. "
+                   "A user needs enough earlier accesses before a baseline is used.")
+        st.dataframe(pd.DataFrame({
+            "User ID": baselines["user_id"], "Username": baselines["username"],
+            "Accesses": baselines["accesses"], "Typical Records (median)": baselines["typical_records"],
+            "Flagged as Unusual Above": baselines["unusual_above"], "Baseline": baselines["status"],
+        }), hide_index=True, width="stretch")
 
 
 # -------------------------------------------------------------- demo control

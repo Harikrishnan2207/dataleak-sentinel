@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
-from .config import DB_PATH, DEFAULT_SETTINGS, TIME_FORMAT, validate_settings
+from .config import BASELINE_LIMIT, DB_PATH, DEFAULT_SETTINGS, TIME_FORMAT, validate_settings
 from .detection import evaluate_logs
 
 SCHEMA = """
@@ -94,21 +94,28 @@ class SentinelDB:
                 conn.execute("ALTER TABLE access_logs ADD COLUMN query_text TEXT")
 
     # ------------------------------------------------------------- settings
-    def get_settings(self) -> dict[str, int]:
+    def get_settings(self) -> dict[str, float]:
         cfg = dict(DEFAULT_SETTINGS)
         with self._conn() as conn:
             stored = dict(conn.execute("SELECT key, value FROM settings").fetchall())
         for key in cfg:
             if key in stored:
                 try:
-                    cfg[key] = int(stored[key])
+                    # Keep each setting's own type (most are whole numbers, anomaly_z is a decimal).
+                    cfg[key] = float(stored[key]) if isinstance(cfg[key], float) else int(stored[key])
                 except ValueError:
                     pass
         return cfg
 
-    def save_settings(self, cfg: dict[str, int]) -> list[str]:
+    def save_settings(self, cfg: dict[str, float]) -> list[str]:
         """Validate and store settings. Returns validation errors (nothing saved if any)."""
-        merged = {**DEFAULT_SETTINGS, **{k: int(v) for k, v in cfg.items() if k in DEFAULT_SETTINGS}}
+        merged = {
+            **DEFAULT_SETTINGS,
+            **{
+                k: (float(v) if isinstance(DEFAULT_SETTINGS[k], float) else int(v))
+                for k, v in cfg.items() if k in DEFAULT_SETTINGS
+            },
+        }
         errors = validate_settings(merged)
         if errors:
             return errors
@@ -197,8 +204,6 @@ class SentinelDB:
         cfg = self.get_settings()
         ts = (timestamp or datetime.now()).replace(microsecond=0)
         ts_text = ts.strftime(TIME_FORMAT)
-        window = max(cfg["repeat_window_min"], cfg["freq_window_min"])
-        since = (ts - timedelta(minutes=window)).strftime(TIME_FORMAT)
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO access_logs "
@@ -207,10 +212,12 @@ class SentinelDB:
                 (user_id, username, department, ts_text, access_type, int(records), source, query_text),
             )
             log_id = cur.lastrowid
+            # The user's recent history (time windows) and baseline (older accesses) both come from this.
             recent = pd.read_sql_query(
                 f"SELECT {LOG_COLUMNS} FROM access_logs "
-                "WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?",
-                conn, params=(user_id, since, ts_text),
+                "WHERE user_id = ? AND timestamp <= ? "
+                "ORDER BY timestamp DESC, log_id DESC LIMIT ?",
+                conn, params=(user_id, ts_text, 2 * BASELINE_LIMIT),
             )
             results = evaluate_logs(recent, cfg)
             row = results[results["log_id"] == log_id].iloc[0]

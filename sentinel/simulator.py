@@ -21,6 +21,7 @@ EMPLOYEES = [
     ("U1011", "farhan.ali", "Operations"),
     ("U1012", "lakshmi.nair", "Operations"),
     ("U1013", "temp.contractor", "Contractor"),
+    ("U1014", "tara.george", "Support"),
 ]
 USERS = {uid: (uid, name, dept) for uid, name, dept in EMPLOYEES}
 
@@ -34,6 +35,7 @@ MEDIUM_USERS = ["U1009", "U1010"]
 BULK_USER = "U1011"
 REPEAT_USER = "U1012"
 BURST_USER = "U1013"
+SPIKE_USER = "U1014"
 
 
 def _work_hours_minutes_ago(rng: random.Random, now: datetime) -> int:
@@ -48,7 +50,7 @@ def _work_hours_minutes_ago(rng: random.Random, now: datetime) -> int:
 
 
 def generate_demo_events(seed: int = 42, now: datetime | None = None) -> list[dict]:
-    """Build a mixed batch: normal, medium-risk, bulk extraction, repeated access, burst."""
+    """Build a mixed batch: normal, medium-risk, bulk extraction, repeated access, burst, per-user spike."""
     rng = random.Random(seed)
     now = (now or datetime.now()).replace(microsecond=0)
     events: list[dict] = []
@@ -96,6 +98,12 @@ def generate_demo_events(seed: int = 42, now: datetime | None = None) -> list[di
     baseline(BURST_USER, 4)
     for i in range(12):
         add(BURST_USER, 38 - i * 0.95 + rng.uniform(-0.2, 0.2), "API Read", rng.randint(3, 14))
+
+    # 6. Unusual for this user: a steady low-volume reader suddenly pulls 19 rows.
+    #    19 is inside the Low band (1-20), so only the per-user baseline can notice it.
+    for _ in range(20):
+        add(SPIKE_USER, _work_hours_minutes_ago(rng, now) + 120, "SELECT Query", rng.choice([3, 3, 4]))
+    add(SPIKE_USER, 40, "SELECT Query", 19)
 
     events.sort(key=lambda e: e["timestamp"])
     return events

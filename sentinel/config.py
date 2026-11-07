@@ -15,7 +15,7 @@ SAMPLE_DB_PATH = Path(os.environ.get("DATALEAK_SAMPLE_DB_PATH", DATA_DIR / "samp
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # User-configurable detection settings (stored in the SQLite `settings` table).
-DEFAULT_SETTINGS: dict[str, int] = {
+DEFAULT_SETTINGS: dict[str, float] = {
     "low_max": 20,              # 1..low_max records            -> Low volume
     "medium_max": 100,          # low_max+1..medium_max records -> Medium volume; above -> High
     "repeat_min_records": 50,   # an access counts as "high-volume" at or above this size
@@ -24,6 +24,10 @@ DEFAULT_SETTINGS: dict[str, int] = {
     "freq_count": 10,           # this many accesses ...
     "freq_window_min": 15,      # ... inside this window = unusual frequency
     "cumulative_limit": 500,    # records pulled by one user inside repeat_window_min
+    "anomaly_enabled": 1,       # 1 = compare each access with the user's own history, 0 = off
+    "anomaly_min_history": 15,  # prior accesses needed before a baseline is trusted
+    "anomaly_min_records": 10,  # accesses smaller than this are never flagged as unusual
+    "anomaly_z": 4.0,           # robust z-score at or above which an access is unusual
 }
 
 # Risk score bands (0-100). Volume alone maps a record count into a band;
@@ -33,6 +37,9 @@ SCORE_MEDIUM_MAX = 60
 BONUS_REPEATED = 15
 BONUS_FREQUENCY = 10
 BONUS_CUMULATIVE = 10
+BONUS_ANOMALY = 15
+ANOMALY_SCALE_FLOOR = 0.25   # minimum spread (log units) so very steady users do not divide by ~0
+BASELINE_LIMIT = 200         # most recent prior accesses used as a user's baseline
 
 RISK_LEVELS = ["Low", "Medium", "High"]
 RISK_COLORS = {"Low": "#34D399", "Medium": "#FBBF24", "High": "#F87171"}
@@ -56,4 +63,12 @@ def validate_settings(cfg: dict[str, int]) -> list[str]:
         errors.append("Time windows must be at least 1 minute.")
     if cfg["cumulative_limit"] < 1:
         errors.append("The cumulative volume limit must be at least 1 record.")
+    if cfg["anomaly_enabled"] not in (0, 1):
+        errors.append("Anomaly detection must be switched on (1) or off (0).")
+    if cfg["anomaly_min_history"] < 3:
+        errors.append("A user baseline needs at least 3 prior accesses.")
+    if cfg["anomaly_min_records"] < 1:
+        errors.append("The anomaly minimum size must be at least 1 record.")
+    if cfg["anomaly_z"] <= 0:
+        errors.append("The anomaly threshold must be greater than 0.")
     return errors

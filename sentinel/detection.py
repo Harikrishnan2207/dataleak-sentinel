@@ -3,7 +3,8 @@
 Every access event gets a risk score (0-100) built from:
   1. Volume    - records accessed, mapped into a band using the configurable thresholds.
   2. Behaviour - bonus points for repeated high-volume access, unusual access
-                 frequency and high cumulative volume inside a time window.
+                 frequency, high cumulative volume inside a time window, and an
+                 access that is unusual for that particular user (statistical baseline).
 
 The score maps to a risk level: <=25 Low, 26-60 Medium, >60 High. Any triggered
 behaviour rule guarantees at least Medium, so an access that looks harmless on
@@ -11,12 +12,17 @@ its own (for example a tiny query that is the 10th in a few minutes) still alert
 """
 from __future__ import annotations
 
+import math
+import statistics
 from collections import deque
 from datetime import datetime, timedelta
 
 import pandas as pd
 
 from .config import (
+    ANOMALY_SCALE_FLOOR,
+    BASELINE_LIMIT,
+    BONUS_ANOMALY,
     BONUS_CUMULATIVE,
     BONUS_FREQUENCY,
     BONUS_REPEATED,
@@ -48,11 +54,37 @@ def volume_score(records: int, cfg: dict[str, int]) -> int:
     return SCORE_MEDIUM_MAX + 1 + round(24 * extra)
 
 
-def score_event(records, ts, prior, cfg):
+def baseline_stats(history) -> tuple[float, float]:
+    """Robust centre and spread of a user's record counts, on a log scale.
+
+    Record counts are heavily skewed, so they are log-transformed. The centre is the
+    median and the spread is the median absolute deviation (scaled to match a standard
+    deviation), which a few large outliers cannot drag around the way a mean would.
+    """
+    logs = [math.log1p(max(0, int(r))) for r in history]
+    centre = statistics.median(logs)
+    mad = statistics.median(abs(v - centre) for v in logs)
+    return centre, max(1.4826 * mad, ANOMALY_SCALE_FLOOR)
+
+
+def anomaly_zscore(records: int, history) -> float:
+    """Robust z-score of `records` against the user's own history (positive = larger than usual)."""
+    centre, scale = baseline_stats(history)
+    return (math.log1p(max(0, int(records))) - centre) / scale
+
+
+def unusual_above(history, cfg) -> int:
+    """Smallest record count that would be flagged as unusual for this baseline."""
+    centre, scale = baseline_stats(history)
+    return max(int(cfg["anomaly_min_records"]), math.ceil(math.expm1(centre + cfg["anomaly_z"] * scale)))
+
+
+def score_event(records, ts, prior, cfg, baseline=None):
     """Score one access.
 
-    `prior` holds (timestamp, records) of the same user's earlier accesses.
-    Returns (score, list_of_reasons).
+    `prior` holds (timestamp, records) of the same user's earlier accesses inside the
+    time windows; `baseline` holds the record counts of the user's earlier accesses
+    (any age, most recent BASELINE_LIMIT). Returns (score, list_of_reasons).
     """
     low, med = cfg["low_max"], cfg["medium_max"]
     reasons: list[str] = []
@@ -97,6 +129,22 @@ def score_event(records, ts, prior, cfg):
             f"Cumulative volume: {total:,} records within {cfg['repeat_window_min']} min"
         )
 
+    # Rule 4: unusual for this user compared with their own history.
+    if (
+        baseline is not None
+        and cfg.get("anomaly_enabled", 1)
+        and len(baseline) >= cfg.get("anomaly_min_history", 8)
+        and records >= cfg.get("anomaly_min_records", 10)
+    ):
+        z = anomaly_zscore(records, baseline)
+        if z >= cfg.get("anomaly_z", 3.5):
+            bonus += BONUS_ANOMALY
+            typical = round(math.expm1(baseline_stats(baseline)[0]))
+            reasons.append(
+                f"Unusual for this user: {records:,} records vs typical {typical:,} "
+                f"(robust z-score {z:.1f}, based on {len(baseline)} earlier accesses)"
+            )
+
     base = volume_score(records, cfg)
     if bonus:
         # A triggered behaviour rule always lifts the access to at least Medium,
@@ -123,6 +171,7 @@ def evaluate_logs(logs: pd.DataFrame, cfg: dict[str, int]) -> pd.DataFrame:
 
     window = timedelta(minutes=max(cfg["repeat_window_min"], cfg["freq_window_min"]))
     history: dict[str, deque] = {}
+    baselines: dict[str, deque] = {}
     rows = []
     for log_id, user_id, ts, n in zip(df["log_id"], df["user_id"], df["_ts"], df["records_accessed"]):
         ts = ts.to_pydatetime()
@@ -130,8 +179,27 @@ def evaluate_logs(logs: pd.DataFrame, cfg: dict[str, int]) -> pd.DataFrame:
         prior = history.setdefault(str(user_id), deque())
         while prior and prior[0][0] < ts - window:
             prior.popleft()
-        score, reasons = score_event(n, ts, prior, cfg)
+        seen = baselines.setdefault(str(user_id), deque(maxlen=BASELINE_LIMIT))
+        score, reasons = score_event(n, ts, prior, cfg, list(seen))
         rows.append((int(log_id), score, level_from_score(score), "; ".join(reasons)))
         prior.append((ts, n))
+        seen.append(n)
 
     return pd.DataFrame(rows, columns=RESULT_COLUMNS)
+
+
+def user_baselines(logs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Per-user summary of what the detector currently treats as normal."""
+    rows = []
+    for (user_id, username), grp in logs.groupby(["user_id", "username"]):
+        history = list(grp.sort_values("timestamp")["records_accessed"].tail(BASELINE_LIMIT))
+        ready = len(history) >= cfg["anomaly_min_history"]
+        centre, _ = baseline_stats(history)
+        rows.append({
+            "user_id": user_id, "username": username, "accesses": len(grp),
+            "typical_records": round(math.expm1(centre)),
+            "unusual_above": unusual_above(history, cfg) if ready else None,
+            "status": "Baseline ready" if ready else f"Learning ({len(history)} of {cfg['anomaly_min_history']})",
+        })
+    return pd.DataFrame(rows).sort_values("accesses", ascending=False).reset_index(drop=True) if rows else pd.DataFrame(
+        columns=["user_id", "username", "accesses", "typical_records", "unusual_above", "status"])
