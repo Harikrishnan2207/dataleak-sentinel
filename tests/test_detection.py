@@ -75,6 +75,23 @@ class EvaluateLogs(unittest.TestCase):
     def test_empty(self):
         self.assertTrue(evaluate_logs(pd.DataFrame(columns=["log_id", "user_id", "timestamp", "records_accessed"]), CFG).empty)
 
+    def test_subthreshold_drip_uses_independent_cumulative_window(self):
+        rows = [
+            (i + 1, "A", (T0 + timedelta(minutes=20 * i)).strftime("%Y-%m-%d %H:%M:%S"), 17)
+            for i in range(25)
+        ]
+        logs = pd.DataFrame(rows, columns=["log_id", "user_id", "timestamp", "records_accessed"])
+        cfg = {**CFG, "anomaly_enabled": 0}
+        results = evaluate_logs(logs, cfg).set_index("log_id")
+
+        self.assertTrue((results.loc[1:23, "risk_level"] == "Low").all())
+        self.assertEqual(results.loc[24, "risk_level"], "Medium")
+        self.assertIn("Cumulative volume", results.loc[24, "reason"])
+        self.assertIn("720 min", results.loc[24, "reason"])
+
+        short_window = evaluate_logs(logs, {**cfg, "cumulative_window_min": 60})
+        self.assertTrue((short_window["risk_level"] == "Low").all())
+
 
 if __name__ == "__main__":
     unittest.main()

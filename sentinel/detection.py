@@ -101,7 +101,9 @@ def score_event(records, ts, prior, cfg, baseline=None):
     bonus = 0
     repeat_cut = ts - timedelta(minutes=cfg["repeat_window_min"])
     freq_cut = ts - timedelta(minutes=cfg["freq_window_min"])
+    cumulative_cut = ts - timedelta(minutes=cfg["cumulative_window_min"])
     in_repeat_window = [(t, r) for t, r in prior if t >= repeat_cut]
+    in_cumulative_window = [(t, r) for t, r in prior if t >= cumulative_cut]
 
     # Rule 1: repeated high-volume access.
     if records >= cfg["repeat_min_records"]:
@@ -122,11 +124,11 @@ def score_event(records, ts, prior, cfg, baseline=None):
         )
 
     # Rule 3: cumulative volume inside the window.
-    total = records + sum(r for _, r in in_repeat_window)
-    if in_repeat_window and total >= cfg["cumulative_limit"]:
+    total = records + sum(r for _, r in in_cumulative_window)
+    if in_cumulative_window and total >= cfg["cumulative_limit"]:
         bonus += BONUS_CUMULATIVE
         reasons.append(
-            f"Cumulative volume: {total:,} records within {cfg['repeat_window_min']} min"
+            f"Cumulative volume: {total:,} records within {cfg['cumulative_window_min']} min"
         )
 
     # Rule 4: unusual for this user compared with their own history.
@@ -169,7 +171,9 @@ def evaluate_logs(logs: pd.DataFrame, cfg: dict[str, int]) -> pd.DataFrame:
     df["_ts"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values(["_ts", "log_id"], kind="stable")
 
-    window = timedelta(minutes=max(cfg["repeat_window_min"], cfg["freq_window_min"]))
+    window = timedelta(minutes=max(
+        cfg["repeat_window_min"], cfg["freq_window_min"], cfg["cumulative_window_min"]
+    ))
     history: dict[str, deque] = {}
     baselines: dict[str, deque] = {}
     rows = []

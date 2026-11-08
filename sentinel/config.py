@@ -23,11 +23,12 @@ DEFAULT_SETTINGS: dict[str, float] = {
     "repeat_window_min": 60,    # ... inside this window = repeated high-volume access
     "freq_count": 10,           # this many accesses ...
     "freq_window_min": 15,      # ... inside this window = unusual frequency
-    "cumulative_limit": 500,    # records pulled by one user inside repeat_window_min
+    "cumulative_window_min": 720,  # cumulative-volume lookback (12 hours)
+    "cumulative_limit": 400,    # records pulled by one user inside cumulative_window_min
     "anomaly_enabled": 1,       # 1 = compare each access with the user's own history, 0 = off
     "anomaly_min_history": 15,  # prior accesses needed before a baseline is trusted
     "anomaly_min_records": 10,  # accesses smaller than this are never flagged as unusual
-    "anomaly_z": 4.0,           # robust z-score at or above which an access is unusual
+    "anomaly_z": 2.5,           # robust z-score at or above which an access is unusual
 }
 
 # Risk score bands (0-100). Volume alone maps a record count into a band;
@@ -59,7 +60,7 @@ def validate_settings(cfg: dict[str, int]) -> list[str]:
         errors.append("Repeated access needs at least 2 accesses.")
     if cfg["freq_count"] < 2:
         errors.append("Unusual frequency needs at least 2 accesses.")
-    if cfg["repeat_window_min"] < 1 or cfg["freq_window_min"] < 1:
+    if cfg["repeat_window_min"] < 1 or cfg["freq_window_min"] < 1 or cfg["cumulative_window_min"] < 1:
         errors.append("Time windows must be at least 1 minute.")
     if cfg["cumulative_limit"] < 1:
         errors.append("The cumulative volume limit must be at least 1 record.")

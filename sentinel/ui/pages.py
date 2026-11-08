@@ -56,6 +56,7 @@ SOURCE_LABELS = {
     "simulated": "Simulated batch",
     "manual-simulated": "Manual entry",
     "gateway": "Query gateway (measured)",
+    "api": "Event API (client-reported)",
 }
 
 
@@ -318,8 +319,10 @@ def detection_rules(db) -> None:
         freq_window = b.number_input("Window (minutes)", 1, 1440, cfg["freq_window_min"], key="fw")
 
         st.markdown("**Cumulative volume**")
-        cumulative = st.number_input("Total records in the repeated-access window", 1, 10_000_000,
-                                     cfg["cumulative_limit"])
+        a, b = st.columns(2)
+        cumulative = a.number_input("Total records in the cumulative window", 1, 10_000_000,
+                                    cfg["cumulative_limit"])
+        cumulative_window = b.number_input("Window (minutes)", 1, 1440, cfg["cumulative_window_min"])
 
         st.markdown("**Per-user anomaly detection**")
         anomaly_on = st.checkbox("Compare each access with the user's own history", value=bool(cfg["anomaly_enabled"]))
@@ -337,6 +340,7 @@ def detection_rules(db) -> None:
             "low_max": low_max, "medium_max": medium_max, "repeat_min_records": repeat_min,
             "repeat_count": repeat_count, "repeat_window_min": repeat_window,
             "freq_count": freq_count, "freq_window_min": freq_window, "cumulative_limit": cumulative,
+            "cumulative_window_min": cumulative_window,
             "anomaly_enabled": int(anomaly_on), "anomaly_min_history": anomaly_hist,
             "anomaly_min_records": anomaly_min, "anomaly_z": anomaly_z,
         }
@@ -361,7 +365,7 @@ def detection_rules(db) -> None:
 - **Volume** sets a base score: Low is 1 to 25, Medium is 26 to 60, High is 61 to 85 (rising with volume).
 - **Repeated high-volume access** adds 15 points when a user makes the configured number of high-volume accesses inside the window.
 - **Unusual frequency** adds 10 points when a user makes too many accesses inside a short window, even if each one is small.
-- **Cumulative volume** adds 10 points when a user's total records inside the window pass the limit.
+- **Cumulative volume** adds 10 points when a user's total records inside the configured cumulative window pass the limit.
 - **Unusual for this user** adds 15 points when an access is far larger than that user's own history. It compares the record count with the user's median on a log scale, using the median absolute deviation as the spread (a robust z-score), and only once the user has enough earlier accesses. This is a statistical rule, not machine learning, and it is tuned on synthetic data only.
 - The final score is capped at 100. Scores of 26 to 60 are **Medium** and 61 or more are **High**, and any triggered behaviour rule guarantees at least Medium, so an access that looks harmless on its own can still raise an alert.
 - Medium and High accesses raise an alert. These are simple, transparent heuristics, not a trained model.

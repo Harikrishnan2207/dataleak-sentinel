@@ -32,8 +32,8 @@ Behaviour rules (all configurable):
 
 - **Repeated high-volume access**: 3 or more accesses of at least 50 records within 60 minutes (+15 points).
 - **Unusual access frequency**: 10 or more accesses within 15 minutes, even if each is small (+10 points).
-- **Cumulative volume**: 500 or more records by one user within 60 minutes (+10 points).
-- **Unusual for this user**: an access far larger than that user's own history (+15 points). It uses a robust z-score of the record count against the user's median (log scale, median absolute deviation as spread), needs at least 15 earlier accesses, and ignores accesses under 10 records. This is a statistical rule, not machine learning.
+- **Cumulative volume**: 400 or more records by one user within a configurable window (12 hours by default; +10 points).
+- **Unusual for this user**: an access far larger than that user's own history (+15 points). It uses a robust z-score of the record count against the user's median (log scale, median absolute deviation as spread), needs at least 15 earlier accesses, and ignores accesses under 10 records. The default robust z-score threshold is 2.5. This is a statistical rule, not machine learning.
 
 Each access gets a score from 0 to 100: volume sets a base score (Low 1 to 25, Medium 26 to 60, High 61 to 85), behaviour rules add points, and any triggered behaviour rule guarantees at least Medium. Scores of 26 or more raise an alert with the reasons listed. These are simple heuristics, not a trained model. The default thresholds, including the anomaly settings, were tuned on synthetic data only and would need recalibrating on real workloads.
 
@@ -96,6 +96,14 @@ python send_events.py one --user-id U1001 --username aarav.nair --department Fin
 
 Both the API and the dashboard write to the same SQLite file. That is fine at demo scale; SQLite waits briefly if both write at once.
 
+## Evaluation
+
+```powershell
+python -m sentinel.evaluation
+```
+
+Generates labelled synthetic organisations (normal users, attack episodes, and legitimate-but-unusual activity), scores them with three configurations (volume thresholds only, plus behaviour rules, plus the anomaly rule) and writes `docs/EVALUATION.md`. It takes a few seconds and is deterministic. The report states its own limits: the data and the labels are written by the same author as the detector, so it shows how the rules behave, not how they would perform on real attackers.
+
 ## Run the tests
 
 ```powershell
@@ -132,9 +140,10 @@ dataleak-sentinel/
 
 ## Limitations
 
-- Rule-based plus one statistical rule (per-user baseline): no peer-group comparison and no machine learning. A patient insider who raises their volume slowly can drag their own baseline upward. On steady synthetic users the rule catches a 19-row spike about 78% of the time and never flags accesses under 10 rows; these figures come from synthetic data.
+- Rule-based plus one statistical rule (per-user baseline): no peer-group comparison and no machine learning. A patient insider who raises their volume slowly can drag their own baseline upward. In the labelled evaluation (docs/EVALUATION.md) it caught only a minority of low-volume spikes and almost none of the sub-threshold drip attacks, and earlier calibration on very steady synthetic users looked more favourable than that, so rely on the evaluation.
 - Batch and guided-scenario events use record counts chosen by the simulator. Only Query Console events are measured from real query results, and only for the synthetic customers table.
 - Only queries sent through the Query Console are monitored. User identities are simulated (no login), and monitoring is by rows returned, so an aggregate such as COUNT(*) scores as harmless.
 - Rejected queries (writes, multiple statements) are refused but not logged.
 - The event API trusts the row counts its client reports, uses one shared key and is meant for localhost only (no TLS, per-client keys or rate limiting). It stamps the time itself, so events cannot be backdated.
+- The detector sees record counts and access patterns, not whether an export was authorized. The synthetic evaluation flags all labelled legitimate exports; reducing these false alerts reliably requires trusted approval or workload context.
 - Alert review is a simple New or Reviewed flag, with no ticketing workflow.

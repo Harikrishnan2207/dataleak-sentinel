@@ -21,6 +21,13 @@ NORMAL = {"user_id": "U1001", "username": "aarav.nair", "department": "Finance",
           "access_type": "SELECT Query", "records_accessed": 8}
 
 
+def _audit_script(path):
+    from sentinel.database import SentinelDB as DB
+    from sentinel.ui import pages, styles
+    styles.inject()
+    pages.audit_logs(DB(path))
+
+
 def _dashboard_script(path):
     from sentinel.database import SentinelDB as DB
     from sentinel.ui import pages, styles
@@ -168,6 +175,13 @@ class ApiTests(unittest.TestCase):
             codes = list(pool.map(post, range(80)))
         self.assertEqual(set(codes), {201})
         self.assertEqual(self.db.table_counts()["access_logs"], 80)
+
+    def test_audit_log_page_labels_api_events(self):
+        from streamlit.testing.v1 import AppTest
+        self.client.post("/events", json=NORMAL, headers=self.auth)
+        at = AppTest.from_function(_audit_script, args=(str(self.path),), default_timeout=60).run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("Event API (client-reported)", list(at.dataframe[0].value["Source"]))
 
     def test_dashboard_reads_events_sent_through_the_api(self):
         from streamlit.testing.v1 import AppTest
