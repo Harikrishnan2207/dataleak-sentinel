@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import deque
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from .config import BASELINE_LIMIT, DB_PATH, DEFAULT_SETTINGS, TIME_FORMAT, validate_settings
-from .detection import evaluate_logs
+from .detection import evaluate_logs, level_from_score, score_event
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS access_logs (
@@ -212,16 +213,34 @@ class SentinelDB:
                 (user_id, username, department, ts_text, access_type, int(records), source, query_text),
             )
             log_id = cur.lastrowid
-            # The user's recent history (time windows) and baseline (older accesses) both come from this.
-            recent = pd.read_sql_query(
-                f"SELECT {LOG_COLUMNS} FROM access_logs "
-                "WHERE user_id = ? AND timestamp <= ? "
-                "ORDER BY timestamp DESC, log_id DESC LIMIT ?",
-                conn, params=(user_id, ts_text, 2 * BASELINE_LIMIT),
+            # Give the engine exactly what a full rescan would see for this user: every access inside the
+            # longest time window (frequency, repeated and cumulative rules) plus the most recent
+            # BASELINE_LIMIT earlier accesses (anomaly baseline, any age). A plain "latest N rows" lookup
+            # would silently drop accesses for a user with more than N rows inside the window.
+            window = max(cfg["repeat_window_min"], cfg["freq_window_min"], cfg["cumulative_window_min"])
+            since = (ts - timedelta(minutes=window)).strftime(TIME_FORMAT)
+            in_window = pd.read_sql_query(
+                f"SELECT {LOG_COLUMNS} FROM access_logs WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?",
+                conn, params=(user_id, since, ts_text),
             )
-            results = evaluate_logs(recent, cfg)
-            row = results[results["log_id"] == log_id].iloc[0]
-            score, level, reason = int(row["risk_score"]), str(row["risk_level"]), str(row["reason"])
+            baseline_rows = pd.read_sql_query(
+                f"SELECT {LOG_COLUMNS} FROM access_logs WHERE user_id = ? AND timestamp <= ? "
+                "ORDER BY timestamp DESC, log_id DESC LIMIT ?",
+                conn, params=(user_id, ts_text, BASELINE_LIMIT + 1),
+            )
+            earlier = pd.concat([in_window, baseline_rows]).drop_duplicates("log_id")
+            earlier = earlier[earlier["log_id"] != log_id].copy()
+            earlier["_ts"] = pd.to_datetime(earlier["timestamp"])
+            earlier = earlier.sort_values(["_ts", "log_id"])
+            since_ts = datetime.strptime(since, TIME_FORMAT)
+            prior = deque(
+                (t.to_pydatetime(), int(r))
+                for t, r in zip(earlier["_ts"], earlier["records_accessed"]) if t >= since_ts
+            )
+            baseline = [int(r) for r in earlier["records_accessed"].tail(BASELINE_LIMIT)]
+            # Score just this access against that history (same function a full rescan uses per row).
+            score, reasons = score_event(int(records), ts, prior, cfg, baseline)
+            level, reason = level_from_score(score), "; ".join(reasons)
             now = datetime.now().strftime(TIME_FORMAT)
             conn.execute(
                 "INSERT INTO detections (log_id, risk_score, risk_level, reason, evaluated_at) "

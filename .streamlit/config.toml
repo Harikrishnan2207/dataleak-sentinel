@@ -8,3 +8,8 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# Listen on this computer only. The dashboard has no login and can delete data, so it must not be
+# reachable from other devices on the same network. Remove this only if you add authentication.
+address = "127.0.0.1"
